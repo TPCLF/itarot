@@ -82,45 +82,61 @@ export default function App() {
     setIsCycling(true);
     let intervalId: NodeJS.Timeout;
   
-    // Start cycling numbers
+    // Start cycling numbers for visual effect
     intervalId = setInterval(() => {
       setCyclingNumber(Math.floor(Math.random() * tarotCards.length));
     }, 50);
   
-    // Stop cycling after 2 seconds and select final numbers
+    // Stop cycling and perform card draw after 2 seconds
     setTimeout(() => {
       clearInterval(intervalId);
   
-      let drawnCardsCount = 0;
-      const newDrawnCards: string[] = [...drawnCards]; // Local copy for unique tracking
+      // Create a copy of the drawn cards and labels
+      const newDrawnCards: string[] = [...drawnCards];
       const newDrawnCardLabels: string[] = [...drawnCardLabels];
   
-      // Ensure that we only draw unique cards
-      while (drawnCardsCount < drawCount) {
-        const finalNumber = Math.floor(Math.random() * tarotCards.length);
-        const finalCard = tarotCards[finalNumber];
+      // Identify remaining cards
+      const remainingCards = tarotCards.filter(card => !newDrawnCards.includes(card));
   
-        if (!newDrawnCards.includes(finalCard)) { // Check uniqueness
-          newDrawnCards.push(finalCard);
-          if (drawnCardsCount < spreadLabels[drawCount].length) {
-            newDrawnCardLabels.push(spreadLabels[drawCount][drawnCardsCount]); // Add label
-          } else {
-            newDrawnCardLabels.push("Extra Card"); // Fallback for additional cards
-          }
-          drawnCardsCount++;
-        }
+      // If no cards are left, handle gracefully
+      if (remainingCards.length === 0) {
+        alert("No more cards left in the deck!");
+        setIsCycling(false);
+        return;
       }
   
-      // Update state with unique cards and labels
+      // Determine how many cards to draw
+      const cardsToDraw = Math.min(drawCount, remainingCards.length);
+  
+      // Draw cards from the remaining pool
+      const drawnThisTurn = [];
+      for (let i = 0; i < cardsToDraw; i++) {
+        const randomIndex = Math.floor(Math.random() * remainingCards.length);
+        const selectedCard = remainingCards.splice(randomIndex, 1)[0]; // Remove from remaining pool
+        drawnThisTurn.push(selectedCard);
+  
+        // Add labels if applicable
+        const label = i < spreadLabels[drawCount].length ? spreadLabels[drawCount][i] : "Extra Card";
+        newDrawnCardLabels.push(label);
+      }
+  
+      // Add newly drawn cards to the list of all drawn cards
+      newDrawnCards.push(...drawnThisTurn);
+  
+      // Update state
       setDrawnCards(newDrawnCards);
       setDrawnCardLabels(newDrawnCardLabels);
   
-      // Set the random number for visualizing the last drawn card
-      setRandomNumber(tarotCards.indexOf(newDrawnCards[newDrawnCards.length - 1]));
-      setCyclingNumber(tarotCards.indexOf(newDrawnCards[newDrawnCards.length - 1]));
+      // Set the final cycling and drawn card for UI
+      const lastDrawnCardIndex = tarotCards.indexOf(drawnThisTurn[drawnThisTurn.length - 1]);
+      setRandomNumber(lastDrawnCardIndex);
+      setCyclingNumber(lastDrawnCardIndex);
+  
+      // Stop cycling
       setIsCycling(false);
     }, 2000);
   };
+  
   
 
   const resetDeck = () => {

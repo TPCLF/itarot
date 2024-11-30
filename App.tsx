@@ -81,44 +81,47 @@ export default function App() {
   const generateRandomNumber = () => {
     setIsCycling(true);
     let intervalId: NodeJS.Timeout;
-
+  
     // Start cycling numbers
     intervalId = setInterval(() => {
       setCyclingNumber(Math.floor(Math.random() * tarotCards.length));
     }, 50);
-
+  
     // Stop cycling after 2 seconds and select final numbers
     setTimeout(() => {
       clearInterval(intervalId);
-
+  
       let drawnCardsCount = 0;
-      let newDrawnCards: string[] = [];
-      let newDrawnCardLabels: string[] = [];
-
+      const newDrawnCards: string[] = [...drawnCards]; // Local copy for unique tracking
+      const newDrawnCardLabels: string[] = [...drawnCardLabels];
+  
       // Ensure that we only draw unique cards
       while (drawnCardsCount < drawCount) {
-        let finalCard: string;
-
-        do {
-          const finalNumber = Math.floor(Math.random() * tarotCards.length);
-          finalCard = tarotCards[finalNumber];
-        } while (drawnCards.includes(finalCard)); // Avoid drawing the same card
-
-        newDrawnCards.push(finalCard);
-        newDrawnCardLabels.push(spreadLabels[drawCount][drawnCardsCount]); // Get the label from the spreadLabels object
-        drawnCardsCount++;
+        const finalNumber = Math.floor(Math.random() * tarotCards.length);
+        const finalCard = tarotCards[finalNumber];
+  
+        if (!newDrawnCards.includes(finalCard)) { // Check uniqueness
+          newDrawnCards.push(finalCard);
+          if (drawnCardsCount < spreadLabels[drawCount].length) {
+            newDrawnCardLabels.push(spreadLabels[drawCount][drawnCardsCount]); // Add label
+          } else {
+            newDrawnCardLabels.push("Extra Card"); // Fallback for additional cards
+          }
+          drawnCardsCount++;
+        }
       }
-
-      // Update drawn cards and labels
-      setDrawnCards((prevCards) => [...prevCards, ...newDrawnCards]);
-      setDrawnCardLabels((prevLabels) => [...prevLabels, ...newDrawnCardLabels]);
-
+  
+      // Update state with unique cards and labels
+      setDrawnCards(newDrawnCards);
+      setDrawnCardLabels(newDrawnCardLabels);
+  
       // Set the random number for visualizing the last drawn card
-      setRandomNumber(tarotCards.indexOf(newDrawnCards[newDrawnCards.length - 1])); 
-      setCyclingNumber(tarotCards.indexOf(newDrawnCards[newDrawnCards.length - 1])); 
+      setRandomNumber(tarotCards.indexOf(newDrawnCards[newDrawnCards.length - 1]));
+      setCyclingNumber(tarotCards.indexOf(newDrawnCards[newDrawnCards.length - 1]));
       setIsCycling(false);
     }, 2000);
   };
+  
 
   const resetDeck = () => {
     setRandomNumber(null);
@@ -170,11 +173,13 @@ export default function App() {
         onPress={generateRandomNumber}
         disabled={isCycling || drawnCards.length === tarotCards.length}
       />
+        <View style={styles.resetButton}>
       <Button
         title="Reset Deck"
         onPress={resetDeck}
         disabled={drawnCards.length === 0}
       />
+      </View>
     </View>
   );
 }
@@ -196,7 +201,7 @@ const styles = StyleSheet.create({
     height: 50,
     position: "absolute", // Absolute positioning
     left: 10, // Position it towards the left
-    bottom: 30, // Position it above the bottom edge
+    bottom: 10, // Position it above the bottom edge
     color: "#ffffff",
     backgroundColor: "#6200ea", // Optional: Give the picker a background color
     borderRadius: 10, // Optional: Add rounded corners
@@ -236,5 +241,10 @@ const styles = StyleSheet.create({
   cardText: {
     fontSize: 16,
     color: "white", // Light text color for the card name
+  },
+  resetButton: {
+    position: 'absolute',
+    bottom: 20, // 20px from the bottom
+    right: 20, // 20px from the right
   },
 });

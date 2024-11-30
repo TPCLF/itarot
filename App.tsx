@@ -1,5 +1,6 @@
 import React, { useState } from "react";
 import { View, Text, Button, StyleSheet, ScrollView } from "react-native";
+import { Picker } from "@react-native-picker/picker";
 
 // Tarot card meanings
 const tarotCards = [
@@ -22,11 +23,60 @@ const tarotCards = [
   "Judgement", "The World"
 ];
 
+// Explicitly type the spreadLabels to ensure the keys are 3, 6, 9, 10, or 12
+const spreadLabels: {
+  [key in 1 | 3 | 6 | 9 | 10 | 12]: string[];
+} = {
+  1: [],
+  3: ["Past", "Present", "Future"],
+  6: ["Past", "Present", "Future", "Hidden Influences", "External Factors", "Outcome"],
+  9: [
+    "Present Situation",
+    "Immediate Influence",
+    "Hidden Influences",
+    "Past Influence",
+    "Recent Past",
+    "Future Influence",
+    "The Querent’s Role",
+    "External Factors",
+    "Outcome/ Advice"
+  ],
+  10: [
+    "Present Position",
+    "Immediate Influence",
+    "Goal or Destiny",
+    "Distant Past",
+    "Recent Past",
+    "Future Influence",
+    "The Questioner",
+    "External Factors",
+    "Inner Emotions",
+    "Final Result"
+  ],
+  12: [
+    "Past Influences",
+    "Present Situation",
+    "Immediate Influences",
+    "Distant Past",
+    "Recent Past",
+    "Near Future",
+    "Far Future",
+    "External Influences",
+    "Emotional State",
+    "The Querent’s Role",
+    "Outcome/ Advice",
+    "Final Outcome"
+  ]
+};
+
 export default function App() {
   const [randomNumber, setRandomNumber] = useState<number | null>(null);
   const [cyclingNumber, setCyclingNumber] = useState<number | null>(null);
   const [isCycling, setIsCycling] = useState(false);
-  const [drawnCards, setDrawnCards] = useState<{ name: string; number: number }[]>([]);
+  const [drawnCards, setDrawnCards] = useState<string[]>([]);  // Track drawn card names
+  const [drawnCardLabels, setDrawnCardLabels] = useState<string[]>([]);  // Track card labels
+  const [selectedValue, setSelectedValue] = useState<number>(1);
+  const [drawCount, setDrawCount] = useState<1 | 3 | 6 | 9 | 10 | 12>(1); // Type as one of 3 | 6 | 9 | 10 | 12
 
   const generateRandomNumber = () => {
     setIsCycling(true);
@@ -34,23 +84,38 @@ export default function App() {
 
     // Start cycling numbers
     intervalId = setInterval(() => {
-      setCyclingNumber(Math.floor(Math.random() * tarotCards.length) + 1);
+      setCyclingNumber(Math.floor(Math.random() * tarotCards.length));
     }, 50);
 
-    // Stop cycling after 2 seconds and select a final number
+    // Stop cycling after 2 seconds and select final numbers
     setTimeout(() => {
       clearInterval(intervalId);
-      let finalNumber: number;
-      do {
-        finalNumber = Math.floor(Math.random() * tarotCards.length);
-      } while (drawnCards.some((card) => card.name === tarotCards[finalNumber])); // Avoid duplicates
 
-      setRandomNumber(finalNumber);
-      setCyclingNumber(finalNumber);
-      setDrawnCards((prevCards) => [
-        ...prevCards,
-        { name: tarotCards[finalNumber], number: prevCards.length + 1 }
-      ]);
+      let drawnCardsCount = 0;
+      let newDrawnCards: string[] = [];
+      let newDrawnCardLabels: string[] = [];
+
+      // Ensure that we only draw unique cards
+      while (drawnCardsCount < drawCount) {
+        let finalCard: string;
+
+        do {
+          const finalNumber = Math.floor(Math.random() * tarotCards.length);
+          finalCard = tarotCards[finalNumber];
+        } while (drawnCards.includes(finalCard)); // Avoid drawing the same card
+
+        newDrawnCards.push(finalCard);
+        newDrawnCardLabels.push(spreadLabels[drawCount][drawnCardsCount]); // Get the label from the spreadLabels object
+        drawnCardsCount++;
+      }
+
+      // Update drawn cards and labels
+      setDrawnCards((prevCards) => [...prevCards, ...newDrawnCards]);
+      setDrawnCardLabels((prevLabels) => [...prevLabels, ...newDrawnCardLabels]);
+
+      // Set the random number for visualizing the last drawn card
+      setRandomNumber(tarotCards.indexOf(newDrawnCards[newDrawnCards.length - 1])); 
+      setCyclingNumber(tarotCards.indexOf(newDrawnCards[newDrawnCards.length - 1])); 
       setIsCycling(false);
     }, 2000);
   };
@@ -58,11 +123,25 @@ export default function App() {
   const resetDeck = () => {
     setRandomNumber(null);
     setCyclingNumber(null);
-    setDrawnCards([]);
+    setDrawnCards([]); // Clear drawn cards
+    setDrawnCardLabels([]); // Clear labels
   };
 
   return (
     <View style={styles.container}>
+      {/* Draw Count Selection */}
+      <Picker
+        selectedValue={drawCount}
+        style={styles.picker}
+        onValueChange={(itemValue) => setDrawCount(itemValue as 3 | 6 | 9 | 10 | 12)} // Type assertion here
+      >
+        <Picker.Item label="1 Card" value={1} />
+        <Picker.Item label="3 Cards" value={3} />
+        <Picker.Item label="6 Cards" value={6} />
+        <Picker.Item label="9 Cards" value={9} />
+        <Picker.Item label="10 Cards" value={10} />
+        <Picker.Item label="12 Cards" value={12} />
+      </Picker>
       {/* Visualizer */}
       <View style={styles.visualizer}>
         <Text style={styles.visualizerText}>
@@ -78,18 +157,14 @@ export default function App() {
       >
         {drawnCards.map((card, index) => (
           <View key={index} style={styles.card}>
-            <Text style={styles.cardNumber}>#{card.number}</Text> {/* Display card number */}
-            <Text style={styles.cardText}>{card.name}</Text>
+            <Text style={styles.cardNumber}>{drawnCardLabels[index]}</Text>
+            <Text style={styles.cardText}>{card}</Text>
           </View>
         ))}
       </ScrollView>
 
       {/* Main Content */}
-      <Text style={styles.numberText}>
-        {randomNumber !== null
-          ? `You drew: ${tarotCards[randomNumber]}`
-          : 'Press "Draw a Card" to begin!'}
-      </Text>
+      
       <Button
         title="Draw a Card"
         onPress={generateRandomNumber}
@@ -112,25 +187,27 @@ const styles = StyleSheet.create({
     backgroundColor: "#121212", // Dark background
   },
   numberText: {
-    fontSize: 24,
-    marginVertical: 20,
-    color: "#ffffff", // Light text color
-    textAlign: "center",
+    fontSize: 20,
+    margin: 20,
+    color: "white", // Light text color
+  },
+  picker: {
+    width: 200,
+    height: 50,
+    position: "absolute", // Absolute positioning
+    left: 10, // Position it towards the left
+    bottom: 30, // Position it above the bottom edge
+    color: "#ffffff",
+    backgroundColor: "#6200ea", // Optional: Give the picker a background color
+    borderRadius: 10, // Optional: Add rounded corners
+    padding: 5, // Optional: Padding for better spacing
   },
   visualizer: {
-    position: "absolute",
-    top: 20,
-    right: 20,
-    backgroundColor: "#1f1f1f", // Darker background for the visualizer
-    padding: 10,
-    borderRadius: 10,
-    borderWidth: 1,
-    borderColor: "#6200ea", // Purple border
+    marginBottom: 20,
   },
   visualizerText: {
-    fontSize: 18,
-    color: "#bb86fc", // Soft purple for text
-    fontWeight: "bold",
+    fontSize: 50,
+    color: "white", // Light text color
   },
   cardDisplayContainer: {
     flexDirection: "row",
@@ -152,14 +229,12 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   cardNumber: {
-    fontSize: 16,
-    color: "#bb86fc", // Soft purple for number
+    fontSize: 18,
     fontWeight: "bold",
-    marginBottom: 5, // Space between number and card text
+    color: "#FFD700", // Gold color for the labels
   },
   cardText: {
-    fontSize: 14,
-    color: "#ffffff",
-    textAlign: "center",
+    fontSize: 16,
+    color: "white", // Light text color for the card name
   },
 });

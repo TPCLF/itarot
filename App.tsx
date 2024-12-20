@@ -73,7 +73,7 @@ export default function App() {
   const [randomNumber, setRandomNumber] = useState<number | null>(null);
   const [cyclingNumber, setCyclingNumber] = useState<number | null>(null);
   const [isCycling, setIsCycling] = useState(false);
-  const [drawnCards, setDrawnCards] = useState<string[]>([]);  // Track drawn card names
+  const [drawnCards, setDrawnCards] = useState<{ card: string; reversed: boolean }[]>([]);
   const [drawnCardLabels, setDrawnCardLabels] = useState<string[]>([]);  // Track card labels
   const [selectedValue, setSelectedValue] = useState<number>(1);
   const [drawCount, setDrawCount] = useState<1 | 3 | 6 | 9 | 10 | 12>(1); // Type as one of 3 | 6 | 9 | 10 | 12
@@ -92,11 +92,13 @@ export default function App() {
       clearInterval(intervalId);
   
       // Create a copy of the drawn cards and labels
-      const newDrawnCards: string[] = [...drawnCards];
+      const newDrawnCards: { card: string; reversed: boolean }[] = [...drawnCards];
       const newDrawnCardLabels: string[] = [...drawnCardLabels];
   
       // Identify remaining cards
-      const remainingCards = tarotCards.filter(card => !newDrawnCards.includes(card));
+      const remainingCards = tarotCards.filter(card => 
+        !newDrawnCards.some(drawnCard => drawnCard.card === card)
+      );
   
       // If no cards are left, handle gracefully
       if (remainingCards.length === 0) {
@@ -113,7 +115,10 @@ export default function App() {
       for (let i = 0; i < cardsToDraw; i++) {
         const randomIndex = Math.floor(Math.random() * remainingCards.length);
         const selectedCard = remainingCards.splice(randomIndex, 1)[0]; // Remove from remaining pool
-        drawnThisTurn.push(selectedCard);
+  
+        // Randomly determine if the card is reversed
+        const isReversed = Math.random() < 0.11; // 11% chance
+        drawnThisTurn.push({ card: selectedCard, reversed: isReversed });
   
         // Add labels if applicable
         const label = i < spreadLabels[drawCount].length ? spreadLabels[drawCount][i] : "Extra Card";
@@ -128,7 +133,7 @@ export default function App() {
       setDrawnCardLabels(newDrawnCardLabels);
   
       // Set the final cycling and drawn card for UI
-      const lastDrawnCardIndex = tarotCards.indexOf(drawnThisTurn[drawnThisTurn.length - 1]);
+      const lastDrawnCardIndex = tarotCards.indexOf(drawnThisTurn[drawnThisTurn.length - 1].card);
       setRandomNumber(lastDrawnCardIndex);
       setCyclingNumber(lastDrawnCardIndex);
   
@@ -161,12 +166,12 @@ export default function App() {
         <Picker.Item label="10 Cards" value={10} />
         <Picker.Item label="12 Cards" value={12} />
       </Picker>
-      {/* Visualizer */}
-      <View style={styles.visualizer}>
+      {/* Top Bar Random Number Visualizer, Commented out for future consideration... */}
+      {/*<View style={styles.visualizer}>
         <Text style={styles.visualizerText}>
           {cyclingNumber !== null ? cyclingNumber : "--"}
         </Text>
-      </View>
+      </View>*/}
 
       {/* Display drawn cards */}
       <ScrollView
@@ -174,12 +179,16 @@ export default function App() {
         horizontal={false}
         showsVerticalScrollIndicator={true}
       >
-        {drawnCards.map((card, index) => (
+        {drawnCards.map((cardObj, index) => (
           <View key={index} style={styles.card}>
             <Text style={styles.cardNumber}>{drawnCardLabels[index]}</Text>
-            <Text style={styles.cardText}>{card}</Text>
-          </View>
-        ))}
+            <Text style={styles.cardText}>
+         {cardObj.card}
+         {cardObj.reversed ? " (Reversed)" : ""}
+        </Text>
+      </View>
+    ))}
+
       </ScrollView>
 
       {/* Main Content */}

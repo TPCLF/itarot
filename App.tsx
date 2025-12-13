@@ -1,6 +1,7 @@
-import React, { useState } from "react";
-import { View, Text, Button, StyleSheet, ScrollView } from "react-native";
+import React, { useState, useEffect } from "react";
+import { View, Text, Button, StyleSheet, ScrollView, ActivityIndicator, Image } from "react-native";
 import { Picker } from "@react-native-picker/picker";
+import axios from "axios";
 
 // Tarot card meanings
 const tarotCards = [
@@ -77,78 +78,190 @@ export default function App() {
   const [drawnCardLabels, setDrawnCardLabels] = useState<string[]>([]);  // Track card labels
   const [selectedValue, setSelectedValue] = useState<number>(1);
   const [drawCount, setDrawCount] = useState<1 | 3 | 6 | 9 | 10 | 12>(1); // Type as one of 3 | 6 | 9 | 10 | 12
+  const [interpretation, setInterpretation] = useState<string | null>(null);
+  const [isLoadingInterpretation, setIsLoadingInterpretation] = useState(false);
 
-  const generateRandomNumber = () => {
+  const [isSpeaking, setIsSpeaking] = useState(false);
+  const [currentAudio, setCurrentAudio] = useState<HTMLAudioElement | null>(null);
+
+
+  // Speak text using backend TTS
+  const speakText = async (text: string) => {
+    console.log('speakText called with:', text?.substring(0, 50));
+
+    // Stop any current speech
+    if (currentAudio) {
+      currentAudio.pause();
+      currentAudio.src = '';
+    }
+
+    if (!text) {
+      console.error('No text provided');
+      return;
+    }
+
+    try {
+      setIsSpeaking(true);
+      console.log('Requesting TTS from backend...');
+
+      // Request audio from backend
+      const response = await axios.post(
+        'http://localhost:5000/api/tts',
+        { text },
+        { responseType: 'blob' }
+      );
+
+      // Create audio from blob
+      const audioUrl = URL.createObjectURL(response.data);
+      const audio = new Audio(audioUrl);
+
+      audio.onended = () => {
+        console.log('Speech ended');
+        setIsSpeaking(false);
+        URL.revokeObjectURL(audioUrl);
+      };
+
+      audio.onerror = (e) => {
+        console.error('Audio playback error:', e);
+        setIsSpeaking(false);
+        URL.revokeObjectURL(audioUrl);
+      };
+
+      setCurrentAudio(audio);
+      await audio.play();
+      console.log('Audio playing');
+
+    } catch (error: any) {
+      console.error('TTS error:', error);
+      setIsSpeaking(false);
+      alert('Voice playback failed. Make sure the backend is running.');
+    }
+  };
+
+  // Stop speaking
+  const stopSpeaking = () => {
+    if (currentAudio) {
+      currentAudio.pause();
+      currentAudio.src = '';
+      setCurrentAudio(null);
+    }
+    setIsSpeaking(false);
+    console.log('Speech stopped');
+  };
+
+
+
+  // Auto-read interpretation when it changes
+  useEffect(() => {
+    if (interpretation && !interpretation.startsWith('Error')) {
+      // Small delay to let UI update
+      setTimeout(() => speakText(interpretation), 500);
+    }
+  }, [interpretation]);
+
+  const requestReading = async () => {
+    stopSpeaking();
+    // If cards have already been drawn, reset the deck first
+    if (drawnCards.length > 0) {
+      setRandomNumber(null);
+      setCyclingNumber(null);
+      setDrawnCards([]);
+      setDrawnCardLabels([]);
+      setInterpretation(null);
+      // Wait a brief moment for state to update
+      await new Promise(resolve => setTimeout(resolve, 100));
+    }
+
     setIsCycling(true);
+    setInterpretation(null);
     let intervalId: NodeJS.Timeout;
-  
+
     // Start cycling numbers for visual effect
     intervalId = setInterval(() => {
       setCyclingNumber(Math.floor(Math.random() * tarotCards.length));
     }, 50);
-  
+
     // Stop cycling and perform card draw after 2 seconds
-    setTimeout(() => {
+    setTimeout(async () => {
       clearInterval(intervalId);
-  
-      // Create a copy of the drawn cards and labels
-      const newDrawnCards: { card: string; reversed: boolean }[] = [...drawnCards];
-      const newDrawnCardLabels: string[] = [...drawnCardLabels];
-  
-      // Identify remaining cards
-      const remainingCards = tarotCards.filter(card => 
-        !newDrawnCards.some(drawnCard => drawnCard.card === card)
-      );
-  
-      // If no cards are left, handle gracefully
-      if (remainingCards.length === 0) {
-        alert("No more cards left in the deck!");
-        setIsCycling(false);
-        return;
-      }
-  
+
+      // Create a fresh array for new reading (since we reset above)
+      const newDrawnCards: { card: string; reversed: boolean }[] = [];
+      const newDrawnCardLabels: string[] = [];
+
+      // All cards are available for a fresh reading
+      const remainingCards = [...tarotCards];
+
       // Determine how many cards to draw
       const cardsToDraw = Math.min(drawCount, remainingCards.length);
-  
+
       // Draw cards from the remaining pool
       const drawnThisTurn = [];
       for (let i = 0; i < cardsToDraw; i++) {
         const randomIndex = Math.floor(Math.random() * remainingCards.length);
         const selectedCard = remainingCards.splice(randomIndex, 1)[0]; // Remove from remaining pool
-  
+
         // Randomly determine if the card is reversed
         const isReversed = Math.random() < 0.11; // 11% chance
         drawnThisTurn.push({ card: selectedCard, reversed: isReversed });
-  
+
         // Add labels if applicable
         const label = i < spreadLabels[drawCount].length ? spreadLabels[drawCount][i] : "Extra Card";
         newDrawnCardLabels.push(label);
       }
-  
-      // Add newly drawn cards to the list of all drawn cards
+
+      // Add newly drawn cards to the list
       newDrawnCards.push(...drawnThisTurn);
-  
+
       // Update state
       setDrawnCards(newDrawnCards);
       setDrawnCardLabels(newDrawnCardLabels);
-  
+
       // Set the final cycling and drawn card for UI
       const lastDrawnCardIndex = tarotCards.indexOf(drawnThisTurn[drawnThisTurn.length - 1].card);
       setRandomNumber(lastDrawnCardIndex);
       setCyclingNumber(lastDrawnCardIndex);
-  
+
       // Stop cycling
       setIsCycling(false);
-    }, 2000);
-  };
-  
-  
 
-  const resetDeck = () => {
-    setRandomNumber(null);
-    setCyclingNumber(null);
-    setDrawnCards([]); // Clear drawn cards
-    setDrawnCardLabels([]); // Clear labels
+      // Automatically get interpretation after drawing cards
+      setIsLoadingInterpretation(true);
+
+      try {
+        // Use the actual number of drawn cards as the spread type
+        const actualSpreadType = newDrawnCards.length as 1 | 3 | 6 | 9 | 10 | 12;
+
+        const response = await axios.post('http://localhost:5000/api/interpret', {
+          cards: newDrawnCards,
+          spreadType: actualSpreadType
+        });
+
+        setInterpretation(response.data.interpretation);
+      } catch (error: any) {
+        console.error('Error getting interpretation:', error);
+
+        // Show the actual error message from the server if available
+        let errorMessage = 'Error: Could not get interpretation.\n\n';
+
+        if (error.response?.data?.error) {
+          errorMessage += `Server error: ${error.response.data.error}\n\n`;
+        } else if (error.message) {
+          errorMessage += `Error: ${error.message}\n\n`;
+        }
+
+        errorMessage +=
+          `Make sure the backend is running:\n` +
+          `1. cd backend\n` +
+          `2. source venv/bin/activate\n` +
+          `3. python app.py\n\n` +
+          `Also ensure Ollama is running with: ollama serve`;
+
+        setInterpretation(errorMessage);
+      } finally {
+        setIsLoadingInterpretation(false);
+      }
+    }, 2000);
   };
 
   return (
@@ -183,28 +296,45 @@ export default function App() {
           <View key={index} style={styles.card}>
             <Text style={styles.cardNumber}>{drawnCardLabels[index]}</Text>
             <Text style={styles.cardText}>
-         {cardObj.card}
-         {cardObj.reversed ? " (Reversed)" : ""}
-        </Text>
-      </View>
-    ))}
+              {cardObj.card}
+              {cardObj.reversed ? " (Reversed)" : ""}
+            </Text>
+          </View>
+        ))}
 
       </ScrollView>
 
+      {/* Interpretation Section */}
+      {interpretation && (
+        <View style={styles.interpretationContainer}>
+          <Text style={styles.interpretationTitle}>Interpretation:</Text>
+          <ScrollView style={styles.interpretationScroll}>
+            <Text style={styles.interpretationText}>{interpretation}</Text>
+          </ScrollView>
+        </View>
+      )}
+
+      {isLoadingInterpretation && (
+        <Image
+          source={require('./assets/teller.gif')}
+          style={styles.loaderGif}
+        />
+      )}
+
       {/* Main Content */}
-      
-      <Button
-        title="Draw a Card"
-        onPress={generateRandomNumber}
-        disabled={isCycling || drawnCards.length === tarotCards.length}
-      />
-        <View style={styles.resetButton}>
-      <Button
-        title="Reset Deck"
-        onPress={resetDeck}
-        disabled={drawnCards.length === 0}
-      />
+      <View style={styles.buttonContainer}>
+        <Button
+          title={isCycling || isLoadingInterpretation ? "Reading..." : "Request New Reading"}
+          onPress={requestReading}
+          disabled={isCycling || isLoadingInterpretation}
+          color="#6200ea"
+        />
       </View>
+
+
+
+
+
     </View>
   );
 }
@@ -267,9 +397,42 @@ const styles = StyleSheet.create({
     fontSize: 16,
     color: "white", // Light text color for the card name
   },
-  resetButton: {
-    position: 'absolute',
-    bottom: 20, // 20px from the bottom
-    right: 20, // 20px from the right
+  buttonContainer: {
+    flexDirection: "row",
+    justifyContent: "center",
+    alignItems: "center",
+    marginVertical: 10,
+  },
+  interpretationContainer: {
+    backgroundColor: "#1f1f1f",
+    borderWidth: 2,
+    borderColor: "#9c27b0",
+    borderRadius: 10,
+    padding: 15,
+    margin: 10,
+    maxHeight: 200,
+    width: "90%",
+  },
+  interpretationTitle: {
+    fontSize: 20,
+    fontWeight: "bold",
+    color: "#FFD700",
+    marginBottom: 10,
+  },
+  interpretationScroll: {
+    maxHeight: 150,
+  },
+  interpretationText: {
+    fontSize: 14,
+    color: "white",
+    lineHeight: 20,
+  },
+
+  loaderGif: {
+    flex: 1,
+    width: "100%",
+    resizeMode: "contain",
+    marginVertical: 10,
   },
 });
+

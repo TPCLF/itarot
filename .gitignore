@@ -34,3 +34,12 @@ yarn-error.*
 
 # typescript
 *.tsbuildinfo
+
+# Backend
+backend/venv/
+backend/__pycache__/
+backend/voices/*.onnx
+backend/voices/*.json
+backend/piper/
+*.pyc
+backend/tarot_cache.json

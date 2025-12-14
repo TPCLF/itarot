@@ -32,7 +32,17 @@ class LLMService:
                 messages=[
                     {
                         'role': 'system',
-                        'content': 'You are an experienced tarot reader who provides insightful, compassionate, and meaningful interpretations. Focus on practical guidance and spiritual insight. Keep interpretations concise but meaningful (2-4 paragraphs).'
+                        'content': (
+                            'You are a mystical fortune teller with acess to ancient wisdom and knowledge. '
+                            'Avoid putting a title in the reading or adding any astrix or other punctuation that could cause the reading to sound obviously generated. '
+                            'Output will be used for a voice over. '
+                            'Your job is to avoid sounding obviously wrong while relating the information provided by the relationship between the cards and how they fall. '
+                            'Discussing what may be versus what definantly is could be a quick path to making a statement that could be misconstrued as wrong. '
+                            'stick to what might be and dont say what absoultly is. '
+                            'Questions are good, your predictions cannot be labled wrong when you are asking plenty questions.'
+                            'For a single card reading, focus on the card and its meaning, do not refrence other spreads. '
+                            'Remember to focus on what cards are in what positions what they mean and the way they are interacting with each other. '
+                        )
                     },
                     {
                         'role': 'user',
@@ -102,6 +112,5 @@ class LLMService:
         prompt += "2. Takes into account the position meanings in the spread\n"
         prompt += "3. Offers practical guidance and spiritual insight\n"
         prompt += "4. Addresses the overall narrative of the reading\n"
-        prompt += "\nKeep the interpretation concise but meaningful (2-4 paragraphs)."
         
         return prompt

@@ -85,6 +85,13 @@ export default function App() {
   const [currentAudio, setCurrentAudio] = useState<HTMLAudioElement | null>(null);
 
 
+  const [visibleCardCount, setVisibleCardCount] = useState<number>(0);
+
+  // Caption state
+  const [speechWords, setSpeechWords] = useState<string[]>([]);
+  const [currentWordIndex, setCurrentWordIndex] = useState<number>(0);
+  const [isLoadingAudio, setIsLoadingAudio] = useState(false);
+
   // Speak text using backend TTS
   const speakText = async (text: string) => {
     console.log('speakText called with:', text?.substring(0, 50));
@@ -97,11 +104,11 @@ export default function App() {
 
     if (!text) {
       console.error('No text provided');
+      setIsLoadingAudio(false);
       return;
     }
 
     try {
-      setIsSpeaking(true);
       console.log('Requesting TTS from backend...');
 
       // Request audio from backend
@@ -115,25 +122,93 @@ export default function App() {
       const audioUrl = URL.createObjectURL(response.data);
       const audio = new Audio(audioUrl);
 
+      // Start speaking state ONLY when we have the audio and are ready to play
+      setIsSpeaking(true);
+      setIsLoadingAudio(false); // Audio is ready, stop loading
+
+      // Prepare captions
+      const words = text.split(/\s+/);
+      setSpeechWords(words);
+      setCurrentWordIndex(0);
+
+      // Animation frame ID
+      let animationFrameId: number;
+
+      // Calculate total "weight" of the text
+      // Longer words take longer. Punctuation adds pause "weight".
+      // Heuristic: 1 char = 1 unit.
+      // Comma = 3 units. Period/Question/Exclamation = 5 units.
+      const getWordWeight = (word: string) => {
+        let weight = word.length;
+        if (word.endsWith(',')) weight += 4;
+        else if (['.', '?', '!'].some(c => word.endsWith(c))) weight += 8;
+        return weight;
+      };
+
+      const wordWeights = words.map(getWordWeight);
+      const totalWeight = wordWeights.reduce((a, b) => a + b, 0);
+
+      const updateCaptions = () => {
+        if (audio.paused || audio.ended) return;
+
+        const duration = audio.duration;
+        const currentTime = audio.currentTime;
+
+        // Don't show captions if we haven't really started (first 0.1s allowed for buffer)
+        // But we want to show the first word right as it starts? 
+        // User said: "It needs to wait to appear untill the voice starts talking"
+        // Let's assume speaking starts effectively at > 0.
+
+        if (duration > 0 && totalWeight > 0) {
+          const progressRatio = currentTime / duration;
+          const targetWeight = progressRatio * totalWeight;
+
+          let currentWeightSum = 0;
+          let foundIndex = 0;
+
+          for (let i = 0; i < words.length; i++) {
+            currentWeightSum += wordWeights[i];
+            if (currentWeightSum >= targetWeight) {
+              foundIndex = i;
+              break;
+            }
+          }
+
+          setCurrentWordIndex(prev => {
+            if (prev !== foundIndex) return foundIndex;
+            return prev;
+          });
+        }
+        animationFrameId = requestAnimationFrame(updateCaptions);
+      };
+
+      audio.onplay = () => {
+        console.log('Audio playing');
+        updateCaptions();
+      };
+
       audio.onended = () => {
         console.log('Speech ended');
         setIsSpeaking(false);
+        if (animationFrameId) cancelAnimationFrame(animationFrameId);
         URL.revokeObjectURL(audioUrl);
       };
 
       audio.onerror = (e) => {
         console.error('Audio playback error:', e);
         setIsSpeaking(false);
+        setIsLoadingAudio(false);
+        if (animationFrameId) cancelAnimationFrame(animationFrameId);
         URL.revokeObjectURL(audioUrl);
       };
 
       setCurrentAudio(audio);
       await audio.play();
-      console.log('Audio playing');
 
     } catch (error: any) {
       console.error('TTS error:', error);
       setIsSpeaking(false);
+      setIsLoadingAudio(false);
       alert('Voice playback failed. Make sure the backend is running.');
     }
   };
@@ -159,6 +234,17 @@ export default function App() {
     }
   }, [interpretation]);
 
+  // Effect to handle sequential card dealing
+  useEffect(() => {
+    if (drawnCards.length > 0 && visibleCardCount < drawnCards.length) {
+      const timer = setTimeout(() => {
+        setVisibleCardCount(prev => prev + 1);
+      }, 1500); // Reveal one card every 1.5 seconds
+
+      return () => clearTimeout(timer);
+    }
+  }, [visibleCardCount, drawnCards]);
+
   const requestReading = async () => {
     stopSpeaking();
     // If cards have already been drawn, reset the deck first
@@ -167,13 +253,16 @@ export default function App() {
       setCyclingNumber(null);
       setDrawnCards([]);
       setDrawnCardLabels([]);
+      setVisibleCardCount(0); // Reset visible count
       setInterpretation(null);
+      setIsLoadingAudio(false); // Reset
       // Wait a brief moment for state to update
       await new Promise(resolve => setTimeout(resolve, 100));
     }
 
     setIsCycling(true);
     setInterpretation(null);
+    setIsLoadingAudio(false);
     let intervalId: NodeJS.Timeout;
 
     // Start cycling numbers for visual effect
@@ -216,6 +305,7 @@ export default function App() {
       // Update state
       setDrawnCards(newDrawnCards);
       setDrawnCardLabels(newDrawnCardLabels);
+      setVisibleCardCount(0); // Ensure it starts at 0 for the new draw
 
       // Set the final cycling and drawn card for UI
       const lastDrawnCardIndex = tarotCards.indexOf(drawnThisTurn[drawnThisTurn.length - 1].card);
@@ -238,6 +328,7 @@ export default function App() {
         });
 
         setInterpretation(response.data.interpretation);
+        setIsLoadingAudio(true); // Wait for audio to be generated
       } catch (error: any) {
         console.error('Error getting interpretation:', error);
 
@@ -258,11 +349,17 @@ export default function App() {
           `Also ensure Ollama is running with: ollama serve`;
 
         setInterpretation(errorMessage);
+        setIsLoadingAudio(false); // Don't wait on error
       } finally {
         setIsLoadingInterpretation(false);
       }
     }, 2000);
   };
+
+  // Check if fully loaded: Backend is done AND all cards are dealt
+  const isFullyLoaded = !isLoadingInterpretation && (drawnCards.length === 0 || visibleCardCount === drawnCards.length);
+  // Show loader if backend is loading OR cards are still being dealt OR audio is loading OR speaking
+  const showLoader = isLoadingInterpretation || (drawnCards.length > 0 && visibleCardCount < drawnCards.length) || isLoadingAudio || isSpeaking;
 
   return (
     <View style={styles.container}>
@@ -279,12 +376,6 @@ export default function App() {
         <Picker.Item label="10 Cards" value={10} />
         <Picker.Item label="12 Cards" value={12} />
       </Picker>
-      {/* Top Bar Random Number Visualizer, Commented out for future consideration... */}
-      {/*<View style={styles.visualizer}>
-        <Text style={styles.visualizerText}>
-          {cyclingNumber !== null ? cyclingNumber : "--"}
-        </Text>
-      </View>*/}
 
       {/* Display drawn cards */}
       <ScrollView
@@ -292,7 +383,7 @@ export default function App() {
         horizontal={false}
         showsVerticalScrollIndicator={true}
       >
-        {drawnCards.map((cardObj, index) => (
+        {drawnCards.slice(0, visibleCardCount).map((cardObj, index) => (
           <View key={index} style={styles.card}>
             <Text style={styles.cardNumber}>{drawnCardLabels[index]}</Text>
             <Text style={styles.cardText}>
@@ -304,8 +395,18 @@ export default function App() {
 
       </ScrollView>
 
-      {/* Interpretation Section */}
-      {interpretation && (
+      {/* Caption Overlay - Show when speaking */}
+      {isSpeaking && speechWords.length > 0 && (
+        <View style={styles.captionContainer}>
+          <Text style={styles.captionText}>
+            {/* Show current word and maybe next one for context/smoothness */}
+            {speechWords[currentWordIndex]} {speechWords[currentWordIndex + 1] || ''}
+          </Text>
+        </View>
+      )}
+
+      {/* Interpretation Section - Only show when fully loaded AND NOT speaking AND NOT loading audio */}
+      {interpretation && isFullyLoaded && !isSpeaking && !isLoadingAudio && (
         <View style={styles.interpretationContainer}>
           <Text style={styles.interpretationTitle}>Interpretation:</Text>
           <ScrollView style={styles.interpretationScroll}>
@@ -314,26 +415,30 @@ export default function App() {
         </View>
       )}
 
-      {isLoadingInterpretation && (
-        <Image
-          source={require('./assets/teller.gif')}
-          style={styles.loaderGif}
-        />
+      {showLoader && (
+        <View style={styles.loaderContainer}>
+          {!isSpeaking && (
+            <Text style={styles.loadingMantra}>
+              Be patient and allow your energy to be open and readable...
+            </Text>
+          )}
+          <Image
+            source={require('./assets/teller.gif')}
+            style={styles.loaderGif}
+          />
+        </View>
       )}
 
-      {/* Main Content */}
-      <View style={styles.buttonContainer}>
-        <Button
-          title={isCycling || isLoadingInterpretation ? "Reading..." : "Request New Reading"}
-          onPress={requestReading}
-          disabled={isCycling || isLoadingInterpretation}
-          color="#6200ea"
-        />
-      </View>
-
-
-
-
+      {/* Main Content - Only show button when valid to start new reading */}
+      {!showLoader && !isCycling && (
+        <View style={styles.buttonContainer}>
+          <Button
+            title="Request New Reading"
+            onPress={requestReading}
+            color="#6200ea"
+          />
+        </View>
+      )}
 
     </View>
   );
@@ -342,9 +447,10 @@ export default function App() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    justifyContent: "center",
+    justifyContent: "flex-start", // Changed from center to pack items at top
     alignItems: "center",
     backgroundColor: "#121212", // Dark background
+    paddingTop: 60, // Add padding for status bar area since we removed centering
   },
   numberText: {
     fontSize: 20,
@@ -374,7 +480,8 @@ const styles = StyleSheet.create({
     flexWrap: "wrap",
     justifyContent: "center",
     alignItems: "center",
-    marginVertical: 10,
+    marginVertical: 5,
+    marginBottom: 0,
   },
   card: {
     backgroundColor: "#1f1f1f",
@@ -427,12 +534,52 @@ const styles = StyleSheet.create({
     color: "white",
     lineHeight: 20,
   },
+  captionContainer: {
+    position: 'absolute',
+    bottom: 100, // Position above the button/picker
+    left: 20,
+    right: 20,
+    backgroundColor: 'rgba(0,0,0,0.8)',
+    padding: 20,
+    borderRadius: 15,
+    borderWidth: 1,
+    borderColor: "#FFD700",
+    alignItems: 'center',
+    zIndex: 100,
+  },
+  captionText: {
+    fontSize: 24,
+    fontWeight: 'bold',
+    color: "#FFD700",
+    textAlign: 'center',
+    textShadowColor: 'rgba(0, 0, 0, 0.75)',
+    textShadowOffset: { width: -1, height: 1 },
+    textShadowRadius: 10
+  },
 
   loaderGif: {
-    flex: 1,
     width: "100%",
+    height: 450,
     resizeMode: "contain",
-    marginVertical: 10,
+    marginTop: 0,
+  },
+  loaderContainer: {
+    alignItems: 'center',
+    justifyContent: 'flex-start',
+    width: '100%',
+    marginTop: -40, // Aggressively pull up closer to cards
+    marginBottom: 0,
+    paddingTop: 0,
+  },
+  loadingMantra: {
+    color: '#FFD700',
+    fontSize: 16,
+    fontStyle: 'italic',
+    textAlign: 'center',
+    marginBottom: 0, // Tighten gap between text and GIF
+    textShadowColor: 'rgba(0, 0, 0, 0.75)',
+    textShadowOffset: { width: -1, height: 1 },
+    textShadowRadius: 10
   },
 });
 

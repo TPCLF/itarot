@@ -7,7 +7,7 @@ import subprocess
 import os
 
 class TTSService:
-    def __init__(self, model_path="./voices/en_US-amy-medium.onnx", speech_rate=1.0):
+    def __init__(self, model_path="./voices/ru_RU-irina-medium.onnx", speech_rate=1.0):
         """
         Initialize TTS service with American English female voice (Amy)
         

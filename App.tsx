@@ -475,7 +475,7 @@ export default function App() {
           {/* Only show mantra if we are waiting for the VERY first bits */}
           {!interpretation && (
             <Text style={styles.loadingMantra}>
-              Connecting to the ether...
+              Be patient while I read your computer's energy...
             </Text>
           )}
           <Image
@@ -603,7 +603,7 @@ const styles = StyleSheet.create({
     zIndex: 100,
   },
   captionText: {
-    fontSize: 24,
+    fontSize: 36,
     fontWeight: 'bold',
     color: "#FFD700",
     textAlign: 'center',

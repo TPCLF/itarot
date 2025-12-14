@@ -75,299 +75,357 @@ export default function App() {
   const [cyclingNumber, setCyclingNumber] = useState<number | null>(null);
   const [isCycling, setIsCycling] = useState(false);
   const [drawnCards, setDrawnCards] = useState<{ card: string; reversed: boolean }[]>([]);
-  const [drawnCardLabels, setDrawnCardLabels] = useState<string[]>([]);  // Track card labels
-  const [selectedValue, setSelectedValue] = useState<number>(1);
-  const [drawCount, setDrawCount] = useState<1 | 3 | 6 | 9 | 10 | 12>(1); // Type as one of 3 | 6 | 9 | 10 | 12
-  const [interpretation, setInterpretation] = useState<string | null>(null);
-  const [isLoadingInterpretation, setIsLoadingInterpretation] = useState(false);
+  const [drawnCardLabels, setDrawnCardLabels] = useState<string[]>([]);
+  const [drawCount, setDrawCount] = useState<1 | 3 | 6 | 9 | 10 | 12>(1);
+  const [interpretation, setInterpretation] = useState<string>("");
+  const [isReadingComplete, setIsReadingComplete] = useState(false);
+  const [isInterpreterActive, setIsInterpreterActive] = useState(false);
 
+  // Audio & Caption State
   const [isSpeaking, setIsSpeaking] = useState(false);
-  const [currentAudio, setCurrentAudio] = useState<HTMLAudioElement | null>(null);
+  const [speechWords, setSpeechWords] = useState<string[]>([]);
+  const [currentWordIndex, setCurrentWordIndex] = useState<number>(0);
 
+  // Refs for streaming and queuing
+  const audioQueue = React.useRef<{ audio: HTMLAudioElement; text: string }[]>([]);
+  const isPlayingAudio = React.useRef(false);
+  const currentAudioRef = React.useRef<HTMLAudioElement | null>(null);
+  const animationFrameRef = React.useRef<number | null>(null);
+  const abortControllerRef = React.useRef<AbortController | null>(null);
+  const isReadingCompleteRef = React.useRef(false);
+  const ttsRequestQueue = React.useRef<string[]>([]);
+  const activeTTSRequests = React.useRef(0);
+  const MAX_CONCURRENT_TTS = 2; // Throttle requests to avoid choking backend
 
   const [visibleCardCount, setVisibleCardCount] = useState<number>(0);
 
-  // Caption state
-  const [speechWords, setSpeechWords] = useState<string[]>([]);
-  const [currentWordIndex, setCurrentWordIndex] = useState<number>(0);
-  const [isLoadingAudio, setIsLoadingAudio] = useState(false);
+  // --- Audio Queue Management ---
 
-  // Speak text using backend TTS
-  const speakText = async (text: string) => {
-    console.log('speakText called with:', text?.substring(0, 50));
-
-    // Stop any current speech
-    if (currentAudio) {
-      currentAudio.pause();
-      currentAudio.src = '';
-    }
-
-    if (!text) {
-      console.error('No text provided');
-      setIsLoadingAudio(false);
+  const playNextInQueue = async () => {
+    // Check ref instead of state to avoid stale closures
+    if (isPlayingAudio.current || audioQueue.current.length === 0) {
+      if (audioQueue.current.length === 0 && isReadingCompleteRef.current && activeTTSRequests.current === 0 && ttsRequestQueue.current.length === 0) {
+        // Queue empty, reading done, no pending request -> all done
+        setIsSpeaking(false);
+      }
       return;
     }
 
-    try {
-      console.log('Requesting TTS from backend...');
+    isPlayingAudio.current = true;
+    setIsSpeaking(true);
+    const nextItem = audioQueue.current.shift();
 
-      // Request audio from backend
+    if (!nextItem) {
+      isPlayingAudio.current = false;
+      return;
+    }
+
+    const { audio, text } = nextItem;
+    currentAudioRef.current = audio;
+
+    // Prepare captions
+    const words = text.split(/\s+/);
+    setSpeechWords(words);
+    setCurrentWordIndex(0);
+
+    // Caption Animation Logic
+    const getWordWeight = (word: string) => {
+      let weight = word.length;
+      if (word.endsWith(',')) weight += 4;
+      else if (['.', '?', '!'].some(c => word.endsWith(c))) weight += 8;
+      return weight;
+    };
+    const wordWeights = words.map(getWordWeight);
+    const totalWeight = wordWeights.reduce((a, b) => a + b, 0);
+
+    const updateCaptions = () => {
+      if (!currentAudioRef.current || currentAudioRef.current.paused || currentAudioRef.current.ended) return;
+
+      const duration = currentAudioRef.current.duration;
+      const currentTime = currentAudioRef.current.currentTime;
+
+      if (duration > 0 && totalWeight > 0) {
+        const progressRatio = currentTime / duration;
+        const targetWeight = progressRatio * totalWeight;
+
+        let currentWeightSum = 0;
+        let foundIndex = 0;
+
+        for (let i = 0; i < words.length; i++) {
+          currentWeightSum += wordWeights[i];
+          if (currentWeightSum >= targetWeight) {
+            foundIndex = i;
+            break;
+          }
+        }
+
+        setCurrentWordIndex(prev => (prev !== foundIndex ? foundIndex : prev));
+      }
+      animationFrameRef.current = requestAnimationFrame(updateCaptions);
+    };
+
+    audio.onplay = () => {
+      updateCaptions();
+    };
+
+    audio.onended = () => {
+      if (animationFrameRef.current) cancelAnimationFrame(animationFrameRef.current);
+      URL.revokeObjectURL(audio.src); // Clean up blob URL
+      isPlayingAudio.current = false;
+      playNextInQueue(); // Trigger next immediately
+    };
+
+    audio.onerror = (e) => {
+      console.error('Audio playback error', e);
+      if (animationFrameRef.current) cancelAnimationFrame(animationFrameRef.current);
+      URL.revokeObjectURL(audio.src);
+      isPlayingAudio.current = false;
+      playNextInQueue();
+    };
+
+    try {
+      await audio.play();
+    } catch (err) {
+      console.error("Autoplay failed", err);
+      isPlayingAudio.current = false;
+      playNextInQueue();
+    }
+  };
+
+  const processTTSQueue = async () => {
+    if (activeTTSRequests.current >= MAX_CONCURRENT_TTS || ttsRequestQueue.current.length === 0) {
+      return;
+    }
+
+    const text = ttsRequestQueue.current.shift();
+    if (!text) return;
+
+    activeTTSRequests.current++;
+
+    try {
       const response = await axios.post(
         'http://localhost:5000/api/tts',
         { text },
         { responseType: 'blob' }
       );
-
-      // Create audio from blob
       const audioUrl = URL.createObjectURL(response.data);
       const audio = new Audio(audioUrl);
+      audio.preload = 'auto'; // Hint to load immediately
+      audio.load(); // Force load
 
-      // Start speaking state ONLY when we have the audio and are ready to play
-      setIsSpeaking(true);
-      setIsLoadingAudio(false); // Audio is ready, stop loading
+      audioQueue.current.push({ audio, text });
 
-      // Prepare captions
-      const words = text.split(/\s+/);
-      setSpeechWords(words);
-      setCurrentWordIndex(0);
-
-      // Animation frame ID
-      let animationFrameId: number;
-
-      // Calculate total "weight" of the text
-      // Longer words take longer. Punctuation adds pause "weight".
-      // Heuristic: 1 char = 1 unit.
-      // Comma = 3 units. Period/Question/Exclamation = 5 units.
-      const getWordWeight = (word: string) => {
-        let weight = word.length;
-        if (word.endsWith(',')) weight += 4;
-        else if (['.', '?', '!'].some(c => word.endsWith(c))) weight += 8;
-        return weight;
-      };
-
-      const wordWeights = words.map(getWordWeight);
-      const totalWeight = wordWeights.reduce((a, b) => a + b, 0);
-
-      const updateCaptions = () => {
-        if (audio.paused || audio.ended) return;
-
-        const duration = audio.duration;
-        const currentTime = audio.currentTime;
-
-        // Don't show captions if we haven't really started (first 0.1s allowed for buffer)
-        // But we want to show the first word right as it starts? 
-        // User said: "It needs to wait to appear untill the voice starts talking"
-        // Let's assume speaking starts effectively at > 0.
-
-        if (duration > 0 && totalWeight > 0) {
-          const progressRatio = currentTime / duration;
-          const targetWeight = progressRatio * totalWeight;
-
-          let currentWeightSum = 0;
-          let foundIndex = 0;
-
-          for (let i = 0; i < words.length; i++) {
-            currentWeightSum += wordWeights[i];
-            if (currentWeightSum >= targetWeight) {
-              foundIndex = i;
-              break;
-            }
-          }
-
-          setCurrentWordIndex(prev => {
-            if (prev !== foundIndex) return foundIndex;
-            return prev;
-          });
-        }
-        animationFrameId = requestAnimationFrame(updateCaptions);
-      };
-
-      audio.onplay = () => {
-        console.log('Audio playing');
-        updateCaptions();
-      };
-
-      audio.onended = () => {
-        console.log('Speech ended');
-        setIsSpeaking(false);
-        if (animationFrameId) cancelAnimationFrame(animationFrameId);
-        URL.revokeObjectURL(audioUrl);
-      };
-
-      audio.onerror = (e) => {
-        console.error('Audio playback error:', e);
-        setIsSpeaking(false);
-        setIsLoadingAudio(false);
-        if (animationFrameId) cancelAnimationFrame(animationFrameId);
-        URL.revokeObjectURL(audioUrl);
-      };
-
-      setCurrentAudio(audio);
-      await audio.play();
-
-    } catch (error: any) {
-      console.error('TTS error:', error);
-      setIsSpeaking(false);
-      setIsLoadingAudio(false);
-      alert('Voice playback failed. Make sure the backend is running.');
+      // Attempt to play if waiting
+      playNextInQueue();
+    } catch (error) {
+      console.error("Failed to generate TTS for chunk:", text, error);
+    } finally {
+      activeTTSRequests.current--;
+      processTTSQueue(); // Process next in line
     }
   };
 
-  // Stop speaking
-  const stopSpeaking = () => {
-    if (currentAudio) {
-      currentAudio.pause();
-      currentAudio.src = '';
-      setCurrentAudio(null);
+  const addToAudioQueue = (text: string) => {
+    // Don't generate empty audio
+    if (!text.trim()) return;
+
+    ttsRequestQueue.current.push(text);
+    processTTSQueue();
+  };
+
+  const stopEverything = () => {
+    // Stop Fetch
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+      abortControllerRef.current = null;
     }
+    // Stop Audio
+    if (currentAudioRef.current) {
+      currentAudioRef.current.pause();
+      currentAudioRef.current.src = '';
+      currentAudioRef.current = null;
+    }
+    if (animationFrameRef.current) {
+      cancelAnimationFrame(animationFrameRef.current);
+    }
+    // Clear Queue
+    audioQueue.current = [];
+    ttsRequestQueue.current = []; // Clear pending TTS
+    // Note: active requests will still finish but won't queue more logic if we handle it:
+    // Actually we can't easily cancel the axios promise without an AbortController for it, 
+    // but clearing the queue prevents future ones.
+
+    isPlayingAudio.current = false;
     setIsSpeaking(false);
-    console.log('Speech stopped');
   };
 
-
-
-  // Auto-read interpretation when it changes
-  useEffect(() => {
-    if (interpretation && !interpretation.startsWith('Error')) {
-      // Small delay to let UI update
-      setTimeout(() => speakText(interpretation), 500);
-    }
-  }, [interpretation]);
-
-  // Effect to handle sequential card dealing
+  // --- Card Dealing Effect ---
   useEffect(() => {
     if (drawnCards.length > 0 && visibleCardCount < drawnCards.length) {
       const timer = setTimeout(() => {
         setVisibleCardCount(prev => prev + 1);
-      }, 1500); // Reveal one card every 1.5 seconds
-
+      }, 1500);
       return () => clearTimeout(timer);
     }
   }, [visibleCardCount, drawnCards]);
 
+
+  // --- Main Logic ---
+
   const requestReading = async () => {
-    stopSpeaking();
-    // If cards have already been drawn, reset the deck first
+    stopEverything(); // Clear previous state
+
+    // Reset State
     if (drawnCards.length > 0) {
       setRandomNumber(null);
       setCyclingNumber(null);
       setDrawnCards([]);
       setDrawnCardLabels([]);
-      setVisibleCardCount(0); // Reset visible count
-      setInterpretation(null);
-      setIsLoadingAudio(false); // Reset
-      // Wait a brief moment for state to update
+      setVisibleCardCount(0);
+      setInterpretation("");
+      setIsReadingComplete(false);
+      isReadingCompleteRef.current = false;
+      ttsRequestQueue.current = [];
+      activeTTSRequests.current = 0;
+      setIsInterpreterActive(false);
       await new Promise(resolve => setTimeout(resolve, 100));
     }
 
     setIsCycling(true);
-    setInterpretation(null);
-    setIsLoadingAudio(false);
-    let intervalId: NodeJS.Timeout;
+    setIsReadingComplete(false);
+    isReadingCompleteRef.current = false;
+    ttsRequestQueue.current = [];
+    activeTTSRequests.current = 0;
 
-    // Start cycling numbers for visual effect
-    intervalId = setInterval(() => {
+    // Cycling Animation
+    let intervalId = setInterval(() => {
       setCyclingNumber(Math.floor(Math.random() * tarotCards.length));
     }, 50);
 
-    // Stop cycling and perform card draw after 2 seconds
     setTimeout(async () => {
       clearInterval(intervalId);
 
-      // Create a fresh array for new reading (since we reset above)
+      // 1. Draw Cards
       const newDrawnCards: { card: string; reversed: boolean }[] = [];
       const newDrawnCardLabels: string[] = [];
-
-      // All cards are available for a fresh reading
       const remainingCards = [...tarotCards];
-
-      // Determine how many cards to draw
       const cardsToDraw = Math.min(drawCount, remainingCards.length);
 
-      // Draw cards from the remaining pool
-      const drawnThisTurn = [];
       for (let i = 0; i < cardsToDraw; i++) {
         const randomIndex = Math.floor(Math.random() * remainingCards.length);
-        const selectedCard = remainingCards.splice(randomIndex, 1)[0]; // Remove from remaining pool
-
-        // Randomly determine if the card is reversed
-        const isReversed = Math.random() < 0.11; // 11% chance
-        drawnThisTurn.push({ card: selectedCard, reversed: isReversed });
-
-        // Add labels if applicable
+        const selectedCard = remainingCards.splice(randomIndex, 1)[0];
+        const isReversed = Math.random() < 0.11;
+        newDrawnCards.push({ card: selectedCard, reversed: isReversed });
         const label = i < spreadLabels[drawCount].length ? spreadLabels[drawCount][i] : "Extra Card";
         newDrawnCardLabels.push(label);
       }
 
-      // Add newly drawn cards to the list
-      newDrawnCards.push(...drawnThisTurn);
-
-      // Update state
       setDrawnCards(newDrawnCards);
       setDrawnCardLabels(newDrawnCardLabels);
-      setVisibleCardCount(0); // Ensure it starts at 0 for the new draw
+      setVisibleCardCount(0);
 
-      // Set the final cycling and drawn card for UI
-      const lastDrawnCardIndex = tarotCards.indexOf(drawnThisTurn[drawnThisTurn.length - 1].card);
+      const lastDrawnCardIndex = tarotCards.indexOf(newDrawnCards[newDrawnCards.length - 1].card);
       setRandomNumber(lastDrawnCardIndex);
       setCyclingNumber(lastDrawnCardIndex);
-
-      // Stop cycling
       setIsCycling(false);
+      setIsInterpreterActive(true);
 
-      // Automatically get interpretation after drawing cards
-      setIsLoadingInterpretation(true);
-
+      // 2. Start Streaming Interpretation
       try {
-        // Use the actual number of drawn cards as the spread type
+        abortControllerRef.current = new AbortController();
         const actualSpreadType = newDrawnCards.length as 1 | 3 | 6 | 9 | 10 | 12;
 
-        const response = await axios.post('http://localhost:5000/api/interpret', {
-          cards: newDrawnCards,
-          spreadType: actualSpreadType
+        const response = await fetch('http://localhost:5000/api/interpret_stream', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            cards: newDrawnCards,
+            spreadType: actualSpreadType
+          }),
+          signal: abortControllerRef.current.signal
         });
 
-        setInterpretation(response.data.interpretation);
-        setIsLoadingAudio(true); // Wait for audio to be generated
-      } catch (error: any) {
-        console.error('Error getting interpretation:', error);
+        const reader = response.body?.getReader();
+        const decoder = new TextDecoder();
+        let sentenceBuffer = "";
 
-        // Show the actual error message from the server if available
-        let errorMessage = 'Error: Could not get interpretation.\n\n';
+        if (reader) {
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
 
-        if (error.response?.data?.error) {
-          errorMessage += `Server error: ${error.response.data.error}\n\n`;
-        } else if (error.message) {
-          errorMessage += `Error: ${error.message}\n\n`;
+            const chunk = decoder.decode(value, { stream: true });
+            setInterpretation(prev => prev + chunk); // Update UI text immediately
+
+            // Chunking for Audio
+            sentenceBuffer += chunk;
+
+            // Regex to find sentence splitters (. ? ! or newline)
+            // We keep the delimiter with the sentence
+            let match;
+            const sentenceRegex = /([.?!]+|\n+)/g;
+
+            let lastIndex = 0;
+            while ((match = sentenceRegex.exec(sentenceBuffer)) !== null) {
+              const delimiter = match[0];
+              const endIndex = match.index + delimiter.length;
+
+              const fullSentence = sentenceBuffer.substring(lastIndex, endIndex).trim();
+              if (fullSentence) {
+                addToAudioQueue(fullSentence);
+              }
+              lastIndex = endIndex;
+            }
+
+            // Keep the remainder for the next chunk
+            sentenceBuffer = sentenceBuffer.substring(lastIndex);
+          }
         }
 
-        errorMessage +=
-          `Make sure the backend is running:\n` +
-          `1. cd backend\n` +
-          `2. source venv/bin/activate\n` +
-          `3. python app.py\n\n` +
-          `Also ensure Ollama is running with: ollama serve`;
+        // flush remaining text
+        if (sentenceBuffer.trim()) {
+          addToAudioQueue(sentenceBuffer.trim());
+        }
 
-        setInterpretation(errorMessage);
-        setIsLoadingAudio(false); // Don't wait on error
+        setIsReadingComplete(true);
+        isReadingCompleteRef.current = true;
+
+      } catch (err: any) {
+        if (err.name === 'AbortError') {
+          console.log("Stream aborted");
+        } else {
+          console.error("Stream Error", err);
+          setInterpretation(prev => prev + "\n[Error receiving interpretation]");
+        }
       } finally {
-        setIsLoadingInterpretation(false);
+        setIsInterpreterActive(false);
+        abortControllerRef.current = null;
       }
+
     }, 2000);
   };
 
-  // Check if fully loaded: Backend is done AND all cards are dealt
-  const isFullyLoaded = !isLoadingInterpretation && (drawnCards.length === 0 || visibleCardCount === drawnCards.length);
-  // Show loader if backend is loading OR cards are still being dealt OR audio is loading OR speaking
-  const showLoader = isLoadingInterpretation || (drawnCards.length > 0 && visibleCardCount < drawnCards.length) || isLoadingAudio || isSpeaking;
+  // Logic to show/hide main elements
+  const isCardsDealt = drawnCards.length > 0 && visibleCardCount === drawnCards.length;
+  // Show loader while interpreting AND audio is still potentially queueing/playing, 
+  // OR if cards are still being dealt.
+  // Actually, we want to show the 'Teller' GIF while the AI is "thinking" (getting the stream) 
+  // or while the cards are appearing to create that "seance" vibe.
+  // Once text is streaming in, we might want to keep the GIF until at least some audio starts?
+
+  // Simplified: Show loader until we have the full text? No, that defeats the purpose of streaming.
+  // Show loader only while 'waiting' for the FIRST chunk? 
+  // Let's repurpose: 
+  // - Show loader while `isInterpreterActive` is true (receiving steam) 
+  //   OR `isSpeaking` is true (the teller is talking).
+  const showTeller = isInterpreterActive || isSpeaking || (drawnCards.length > 0 && visibleCardCount < drawnCards.length);
 
   return (
     <View style={styles.container}>
-      {/* Draw Count Selection */}
       <Picker
         selectedValue={drawCount}
         style={styles.picker}
-        onValueChange={(itemValue) => setDrawCount(itemValue as 3 | 6 | 9 | 10 | 12)} // Type assertion here
+        onValueChange={(itemValue) => setDrawCount(itemValue as 3 | 6 | 9 | 10 | 12)}
       >
         <Picker.Item label="1 Card" value={1} />
         <Picker.Item label="3 Cards" value={3} />
@@ -377,7 +435,6 @@ export default function App() {
         <Picker.Item label="12 Cards" value={12} />
       </Picker>
 
-      {/* Display drawn cards */}
       <ScrollView
         contentContainerStyle={styles.cardDisplayContainer}
         horizontal={false}
@@ -392,34 +449,33 @@ export default function App() {
             </Text>
           </View>
         ))}
-
       </ScrollView>
 
-      {/* Caption Overlay - Show when speaking */}
+      {/* Captions */}
       {isSpeaking && speechWords.length > 0 && (
         <View style={styles.captionContainer}>
           <Text style={styles.captionText}>
-            {/* Show current word and maybe next one for context/smoothness */}
             {speechWords[currentWordIndex]} {speechWords[currentWordIndex + 1] || ''}
           </Text>
         </View>
       )}
 
       {/* Interpretation Section - Only show when fully loaded AND NOT speaking AND NOT loading audio */}
-      {interpretation && isFullyLoaded && !isSpeaking && !isLoadingAudio && (
+      {interpretation && isReadingComplete && !isSpeaking ? (
         <View style={styles.interpretationContainer}>
           <Text style={styles.interpretationTitle}>Interpretation:</Text>
-          <ScrollView style={styles.interpretationScroll}>
+          <ScrollView style={styles.interpretationScroll} ref={ref => ref?.scrollToEnd({ animated: true })}>
             <Text style={styles.interpretationText}>{interpretation}</Text>
           </ScrollView>
         </View>
-      )}
+      ) : null}
 
-      {showLoader && (
+      {showTeller && (
         <View style={styles.loaderContainer}>
-          {!isSpeaking && (
+          {/* Only show mantra if we are waiting for the VERY first bits */}
+          {!interpretation && (
             <Text style={styles.loadingMantra}>
-              Be patient and allow your energy to be open and readable...
+              Connecting to the ether...
             </Text>
           )}
           <Image
@@ -429,8 +485,7 @@ export default function App() {
         </View>
       )}
 
-      {/* Main Content - Only show button when valid to start new reading */}
-      {!showLoader && !isCycling && (
+      {!showTeller && !isCycling && (
         <View style={styles.buttonContainer}>
           <Button
             title="Request New Reading"

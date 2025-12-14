@@ -21,6 +21,53 @@ def health_check():
         'message': 'Tarot interpretation service is running'
     })
 
+@app.route('/api/interpret_stream', methods=['POST'])
+def interpret_reading_stream():
+    """
+    Generate a streaming interpretation for a tarot reading.
+    """
+    try:
+        data = request.get_json()
+        if not data:
+            return jsonify({'error': 'No data provided'}), 400
+        
+        cards = data.get('cards', [])
+        spread_type = data.get('spreadType', 1)
+        
+        if not cards:
+            return jsonify({'error': 'No cards provided'}), 400
+            
+        # Get meanings for all cards
+        card_meanings = {}
+        for card_obj in cards:
+            card_name = card_obj['card']
+            is_reversed = card_obj.get('reversed', False)
+            meaning = scraper.get_card_meaning(card_name, is_reversed)
+            card_meanings[card_name.lower()] = meaning
+            
+        # Generator function for streaming response
+        def generate():
+            stream = llm_service.generate_interpretation(
+                cards, 
+                spread_type, 
+                card_meanings, 
+                stream=True
+            )
+            
+            for chunk in stream:
+                if isinstance(chunk, dict) and 'message' in chunk:
+                    content = chunk['message']['content']
+                    if content:
+                        yield content
+                elif isinstance(chunk, str):
+                    yield chunk
+
+        from flask import Response, stream_with_context
+        return Response(stream_with_context(generate()), mimetype='text/plain')
+
+    except Exception as e:
+        return jsonify({'error': f'Error processing request: {str(e)}'}), 500
+
 @app.route('/api/interpret', methods=['POST'])
 def interpret_reading():
     """

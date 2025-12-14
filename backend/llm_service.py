@@ -11,7 +11,8 @@ class LLMService:
         self, 
         cards: List[Dict[str, any]], 
         spread_type: int,
-        card_meanings: Dict[str, Dict[str, str]]
+        card_meanings: Dict[str, Dict[str, str]],
+        stream: bool = False
     ) -> str:
         """
         Generate a tarot reading interpretation.
@@ -20,22 +21,28 @@ class LLMService:
             cards: List of card objects with 'card' and 'reversed' keys
             spread_type: Number of cards in the spread (1, 3, 6, 9, 10, or 12)
             card_meanings: Dictionary mapping card names to their meanings
+            stream: Whether to stream the response as a generator
             
         Returns:
-            String containing the interpretation
+            String containing the interpretation (or generator if stream=True)
         """
         prompt = self._build_prompt(cards, spread_type, card_meanings)
         
         try:
             response = ollama.chat(
                 model=self.model_name,
-                messages=[
+                stream=stream,
+                messages=[ 
                     {
                         'role': 'system',
                         'content': (
-                            'You are a mystical fortune teller with acess to ancient wisdom and knowledge. '
+                            
                             'Avoid putting a title in the reading or adding any astrix or other punctuation that could cause the reading to sound obviously generated. '
+                            'Try really hard to never type any astrix around any text or titles for any part of the reading. '
                             'Output will be used for a voice over. '
+                            'You are a mystical fortune teller with acess to ancient wisdom and knowledge. '
+                            'Use thoughtful questions throughout the reading to invite reflection on the cards meanings. Asking questions is encouraged and preferred over making firm declarations. '
+                            'Speak in terms of possibilities, tendencies, and emerging patterns rather than stating what will happen. Avoid declaring anything as certain or guaranteed. '
                             'Your job is to avoid sounding obviously wrong while relating the information provided by the relationship between the cards and how they fall. '
                             'Discussing what may be versus what definantly is could be a quick path to making a statement that could be misconstrued as wrong. '
                             'stick to what might be and dont say what absoultly is. '
@@ -51,9 +58,16 @@ class LLMService:
                 ]
             )
             
+            if stream:
+                return response # Generator
+            
             return response['message']['content']
         except Exception as e:
-            return f"Error generating interpretation: {str(e)}\n\nPlease ensure Ollama is running and the model '{self.model_name}' is installed."
+            err_msg = f"Error generating interpretation: {str(e)}\n\nPlease ensure Ollama is running and the model '{self.model_name}' is installed."
+            if stream:
+                def err_gen(): yield err_msg
+                return err_gen()
+            return err_msg
     
     def _build_prompt(
         self, 
